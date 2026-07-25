@@ -1,0 +1,17 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { PropsWithChildren } from "react";
+import { BrowserRouter } from "react-router-dom";
+
+import { ColorModeProvider } from "../theme/ColorModeProvider";
+
+const queryClient = new QueryClient();
+
+export function AppProviders({ children }: PropsWithChildren) {
+  return (
+    <ColorModeProvider>
+      <QueryClientProvider client={queryClient}>
+        <BrowserRouter>{children}</BrowserRouter>
+      </QueryClientProvider>
+    </ColorModeProvider>
+  );
+}
