@@ -1,9 +1,15 @@
 import type { PropsWithChildren } from "react";
 import { useEffect } from "react";
 
+import { useAuthUser } from "@/features/auth";
+import { hasAuthSessionHint } from "@/features/auth/utils/authSession";
+
 import { socket } from "./socketClient";
 
 export function SocketConnectionProvider({ children }: PropsWithChildren) {
+  const shouldCheckAuth = hasAuthSessionHint();
+  const { data: user } = useAuthUser({ enabled: shouldCheckAuth });
+
   useEffect(() => {
     const handleConnect = () => {
       console.log(`Socket connected: ${socket.id}`);
@@ -19,10 +25,6 @@ export function SocketConnectionProvider({ children }: PropsWithChildren) {
     socket.on("disconnect", handleDisconnect);
     socket.on("connect_error", handleConnectError);
 
-    if (!socket.connected) {
-      socket.connect();
-    }
-
     return () => {
       socket.off("connect", handleConnect);
       socket.off("disconnect", handleDisconnect);
@@ -30,6 +32,20 @@ export function SocketConnectionProvider({ children }: PropsWithChildren) {
       socket.disconnect();
     };
   }, []);
+
+  useEffect(() => {
+    if (!user) {
+      if (socket.connected) {
+        socket.disconnect();
+      }
+
+      return;
+    }
+
+    if (!socket.connected) {
+      socket.connect();
+    }
+  }, [user]);
 
   return children;
 }

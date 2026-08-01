@@ -37,6 +37,7 @@ import {
 } from "@/features/chat/api/chatApi";
 import { useAuthUser } from "@/features/auth";
 import type { Conversation } from "@/features/chat/types/chat";
+import { joinConversationRoom } from "@/services/socket/socketClient";
 
 type ChatTarget = {
   name: string;
@@ -55,9 +56,11 @@ export function ChatPage() {
   const [conversationId, setConversationId] = useState<number | null>(null);
   const [isDirectConversationError, setIsDirectConversationError] = useState(false);
   const [isDirectConversationLoading, setIsDirectConversationLoading] = useState(false);
+  const [isConversationJoinError, setIsConversationJoinError] = useState(false);
   const [messageBody, setMessageBody] = useState("");
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const startedConversationForUserId = useRef<number | null>(null);
+  const joinedConversationId = useRef<number | null>(null);
   const messagesQueryKey = ["chat", "messages", conversationId] as const;
   const {
     data: messages = [],
@@ -138,6 +141,39 @@ export function ChatPage() {
       block: "end",
     });
   }, [messages.length]);
+
+  useEffect(() => {
+    if (!conversationId || joinedConversationId.current === conversationId) {
+      return;
+    }
+
+    let isActive = true;
+
+    joinedConversationId.current = conversationId;
+    setIsConversationJoinError(false);
+
+    joinConversationRoom(conversationId)
+      .then((response) => {
+        if (!isActive) {
+          return;
+        }
+
+        if (!response.ok) {
+          joinedConversationId.current = null;
+          setIsConversationJoinError(true);
+        }
+      })
+      .catch(() => {
+        if (isActive) {
+          joinedConversationId.current = null;
+          setIsConversationJoinError(true);
+        }
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [conversationId]);
 
   const handleSendMessage = async () => {
     const trimmedBody = messageBody.trim();
@@ -333,6 +369,21 @@ export function ChatPage() {
                 Conversation could not be started.
               </Alert>
             ) : null}
+          </Box>
+        ) : null}
+
+        {receiverId && isConversationJoinError ? (
+          <Box
+            sx={{
+              borderBottom: 1,
+              borderColor: "divider",
+              px: 2,
+              py: 1,
+            }}
+          >
+            <Alert severity="warning" variant="outlined">
+              Realtime chat connection is not ready.
+            </Alert>
           </Box>
         ) : null}
 

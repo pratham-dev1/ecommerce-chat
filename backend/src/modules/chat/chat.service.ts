@@ -146,7 +146,7 @@ export class ChatService {
     }
   }
 
-  private async ensureConversationMember(userId: number, conversationId: number) {
+  async ensureConversationMember(userId: number, conversationId: number) {
     const member = await ConversationMember.findOne({
       where: {
         conversationId,
