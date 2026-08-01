@@ -1,15 +1,20 @@
+import { createServer } from "node:http";
+
 import { createApp } from "./app";
 import { env } from "./config/env";
 import { initializeRedis } from "./config/redis";
+import { initializeSocketServer } from "./config/socket";
 import { initializeDatabase } from "./database/initializeDatabase";
 
 const app = createApp();
+const httpServer = createServer(app);
+initializeSocketServer(httpServer);
 
 async function main() {
   await initializeDatabase();
   await initializeRedis();
 
-  app.listen(env.port, () => {
+  httpServer.listen(env.port, () => {
     console.log(`API listening on http://localhost:${env.port}`);
   });
 }

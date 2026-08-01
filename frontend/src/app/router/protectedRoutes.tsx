@@ -5,6 +5,7 @@ import { ForbiddenPage } from "@/pages/ForbiddenPage";
 import { OrdersPage } from "@/pages/OrdersPage";
 import { ProductDetailsPage } from "@/pages/ProductDetailsPage";
 import { ProductsPage } from "@/pages/ProductsPage";
+import { UsersPage } from "@/pages/UsersPage";
 
 import type { AppRoute } from "./routeTypes";
 
@@ -36,5 +37,9 @@ export const protectedRoutes: AppRoute[] = [
   {
     element: <OrdersPage />,
     path: "orders",
+  },
+  {
+    element: <UsersPage />,
+    path: "users",
   },
 ];

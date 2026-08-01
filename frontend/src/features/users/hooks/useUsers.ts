@@ -27,8 +27,9 @@ export function useUser(userId: number | null, enabled = true) {
   });
 }
 
-export function useRoles() {
+export function useRoles(enabled = true) {
   return useQuery({
+    enabled,
     queryFn: getRoles,
     queryKey: rolesQueryKey,
     staleTime: usersCacheFreshTime,

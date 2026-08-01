@@ -20,10 +20,12 @@ import {
   type GridPaginationModel,
   type GridSortModel,
 } from "@mui/x-data-grid";
-import { Pencil, Plus, Search, Trash2, X } from "lucide-react";
+import { MessageCircle, Pencil, Plus, Search, Trash2, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { PageHeader } from "@/components/layout/PageHeader";
+import { useActiveRole, useAuthUser } from "@/features/auth";
 import {
   UserForm,
   useCreateUserMutation,
@@ -115,6 +117,9 @@ const userFieldSearchInputs: Array<{
 ];
 
 export function UsersPage() {
+  const navigate = useNavigate();
+  const { data: currentUser } = useAuthUser();
+  const { hasGrant } = useActiveRole(currentUser);
   const [drawerMode, setDrawerMode] = useState<UserDrawerMode>("create");
   const [fieldSearch, setFieldSearch] = useState<UserFieldSearch>(emptyUserFieldSearch);
   const [fieldSearchDraft, setFieldSearchDraft] =
@@ -141,7 +146,9 @@ export function UsersPage() {
     selectedUserId,
     isUserDrawerOpen && drawerMode === "edit",
   );
-  const rolesQuery = useRoles();
+  const canCreateUsers = hasGrant("CREATE_USER");
+  const canEditUsers = hasGrant("EDIT_USER");
+  const rolesQuery = useRoles(canEditUsers);
   const createUserMutation = useCreateUserMutation();
   const updateUserMutation = useUpdateUserMutation();
   const deleteUserMutation = useDeleteUserMutation();
@@ -243,6 +250,10 @@ export function UsersPage() {
     }
   };
 
+  const handleOpenChat = (user: User) => {
+    navigate("/chat", { state: { name: user.name, userId: user.id } });
+  };
+
   const columns: GridColDef<User>[] = [
     {
       field: "name",
@@ -280,39 +291,57 @@ export function UsersPage() {
       field: "actions",
       headerAlign: "right",
       headerName: "Actions",
-      minWidth: 120,
+      minWidth: canEditUsers ? 156 : 72,
       renderCell: ({ row }) => (
         <Stack direction="row" spacing={0.5} sx={{ justifyContent: "flex-end", width: "100%" }}>
-          <Tooltip title="Edit user">
+          <Tooltip title="Chat">
             <span>
               <IconButton
-                aria-label={`Edit ${row.name}`}
-                disabled={isMutating}
+                aria-label={`Chat with ${row.name}`}
                 onClick={(event) => {
                   event.stopPropagation();
-                  openEditDrawer(row.id);
+                  handleOpenChat(row);
                 }}
                 size="small"
               >
-                <Pencil size={17} />
+                <MessageCircle size={17} />
               </IconButton>
             </span>
           </Tooltip>
-          <Tooltip title="Delete user">
-            <span>
-              <IconButton
-                aria-label={`Delete ${row.name}`}
-                disabled={isMutating}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  void handleDeleteUser(row);
-                }}
-                size="small"
-              >
-                <Trash2 size={17} />
-              </IconButton>
-            </span>
-          </Tooltip>
+          {canEditUsers ? (
+            <>
+              <Tooltip title="Edit user">
+                <span>
+                  <IconButton
+                    aria-label={`Edit ${row.name}`}
+                    disabled={isMutating}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      openEditDrawer(row.id);
+                    }}
+                    size="small"
+                  >
+                    <Pencil size={17} />
+                  </IconButton>
+                </span>
+              </Tooltip>
+              <Tooltip title="Delete user">
+                <span>
+                  <IconButton
+                    aria-label={`Delete ${row.name}`}
+                    disabled={isMutating}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void handleDeleteUser(row);
+                    }}
+                    size="small"
+                  >
+                    <Trash2 size={17} />
+                  </IconButton>
+                </span>
+              </Tooltip>
+            </>
+          ) : null}
         </Stack>
       ),
       sortable: false,
@@ -327,9 +356,11 @@ export function UsersPage() {
         sx={{ alignItems: { sm: "center", xs: "stretch" }, justifyContent: "space-between" }}
       >
         <PageHeader description="Create, review, update, and remove user accounts." title="Users" />
-        <Button onClick={openCreateDrawer} startIcon={<Plus size={16} />} variant="contained">
-          Create user
-        </Button>
+        {canCreateUsers ? (
+          <Button onClick={openCreateDrawer} startIcon={<Plus size={16} />} variant="contained">
+            Create user
+          </Button>
+        ) : null}
       </Stack>
 
       {(createUserMutation.isError || updateUserMutation.isError || deleteUserMutation.isError) && (
@@ -411,7 +442,11 @@ export function UsersPage() {
             loading={isLoading || isFetching}
             onFilterModelChange={handleFilterModelChange}
             onPaginationModelChange={setPaginationModel}
-            onRowClick={(params) => openEditDrawer(Number(params.row.id))}
+            onRowClick={(params) => {
+              if (canEditUsers) {
+                openEditDrawer(Number(params.row.id));
+              }
+            }}
             onSortModelChange={handleSortModelChange}
             pageSizeOptions={[usersPageSize]}
             paginationMode="server"
@@ -427,7 +462,7 @@ export function UsersPage() {
                 fontWeight: 800,
               },
               "& .MuiDataGrid-row": {
-                cursor: "pointer",
+                cursor: canEditUsers ? "pointer" : "default",
               },
             }}
           />
