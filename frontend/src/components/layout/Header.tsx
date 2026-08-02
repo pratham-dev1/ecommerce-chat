@@ -1,5 +1,6 @@
 import {
   AppBar,
+  Avatar,
   Button,
   Container,
   FormControl,
@@ -32,7 +33,6 @@ const adminNavItems = [{ grant: "READ_USER", label: "Users", to: "/users" }];
 export function Header() {
   const { mode, toggleColorMode } = useColorMode();
   const { data: user } = useAuthUser({ enabled: hasAuthSessionHint() });
-  console.log(user)
   const { activeRoleId, hasGrant, setActiveRoleId } = useActiveRole(user);
   const itemCount = useCartStore((state) => state.itemCount);
   const logoutMutation = useLogoutMutation();
@@ -155,6 +155,35 @@ export function Header() {
               >
                 Logout
               </Button>
+              <Stack
+                direction="row"
+                spacing={1}
+                sx={{
+                  alignItems: "center",
+                  maxWidth: 180,
+                  minWidth: 0,
+                }}
+              >
+                <Avatar
+                  sx={{
+                    bgcolor: "primary.main",
+                    fontSize: "0.78rem",
+                    fontWeight: 800,
+                    height: 30,
+                    width: 30,
+                  }}
+                >
+                  {getInitials(user?.name ?? "User")}
+                </Avatar>
+                <Typography
+                  color="text.primary"
+                  noWrap
+                  sx={{ fontWeight: 700, minWidth: 0 }}
+                  variant="body2"
+                >
+                  {user?.name}
+                </Typography>
+              </Stack>
             </Stack>
           ) : (
             <Button
@@ -183,4 +212,14 @@ export function Header() {
       </Container>
     </AppBar>
   );
+}
+
+function getInitials(value: string) {
+  return value
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase() || "U";
 }

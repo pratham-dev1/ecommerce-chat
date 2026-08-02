@@ -13,6 +13,7 @@ import {
   DialogTitle,
   IconButton,
   InputAdornment,
+  LinearProgress,
   List,
   ListItemButton,
   Paper,
@@ -93,6 +94,8 @@ export function ChatPage() {
   const [isGroupDialogOpen, setIsGroupDialogOpen] = useState(false);
   const [groupTitle, setGroupTitle] = useState("");
   const [groupMemberSearch, setGroupMemberSearch] = useState("");
+  const [debouncedGroupMemberSearch, setDebouncedGroupMemberSearch] = useState("");
+  const [isGroupMemberSearchPending, setIsGroupMemberSearchPending] = useState(false);
   const [conversationSearch, setConversationSearch] = useState("");
   const [selectedGroupMemberIds, setSelectedGroupMemberIds] = useState<number[]>([]);
   const [messageBody, setMessageBody] = useState("");
@@ -102,20 +105,27 @@ export function ChatPage() {
   const groupUsersQueryParams = useMemo(
     () => ({
       pageSize: 25,
-      ...(groupMemberSearch.trim()
-        ? { search: groupMemberSearch.trim() }
+      ...(debouncedGroupMemberSearch
+        ? { search: debouncedGroupMemberSearch }
         : {}),
     }),
-    [groupMemberSearch],
+    [debouncedGroupMemberSearch],
   );
   const groupUsersQuery = useInfiniteUsers(groupUsersQueryParams);
   const groupMemberOptions = useMemo(
     () =>
-      (groupUsersQuery.data?.pages.flatMap((page) => page.data) ?? []).filter(
-        (user) => user.id !== currentUser?.id,
-      ),
-    [currentUser?.id, groupUsersQuery.data?.pages],
+      groupUsersQuery.data?.pages.flatMap((page) => page.data) ?? [],
+    [groupUsersQuery.data?.pages],
   );
+  const trimmedGroupMemberSearch = groupMemberSearch.trim();
+  const isGroupMemberSearchDebouncing =
+    isGroupDialogOpen && trimmedGroupMemberSearch !== debouncedGroupMemberSearch;
+  const isSearchingGroupMembers =
+    Boolean(trimmedGroupMemberSearch) &&
+    (isGroupMemberSearchPending ||
+      isGroupMemberSearchDebouncing ||
+      groupUsersQuery.isFetching) &&
+    !groupUsersQuery.isFetchingNextPage;
   const messagesQueryKey = ["chat", "messages", conversationId] as const;
   const {
     data: conversations = [],
@@ -170,6 +180,35 @@ export function ChatPage() {
       ? "Starting conversation"
       : ""
     : "Choose a user to start a conversation";
+
+  useEffect(() => {
+    if (!isGroupDialogOpen) {
+      return undefined;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedGroupMemberSearch(groupMemberSearch.trim());
+    }, 300);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [groupMemberSearch, isGroupDialogOpen]);
+
+  useEffect(() => {
+    if (
+      !isGroupMemberSearchPending ||
+      trimmedGroupMemberSearch !== debouncedGroupMemberSearch ||
+      groupUsersQuery.isFetching
+    ) {
+      return;
+    }
+
+    setIsGroupMemberSearchPending(false);
+  }, [
+    debouncedGroupMemberSearch,
+    groupUsersQuery.isFetching,
+    isGroupMemberSearchPending,
+    trimmedGroupMemberSearch,
+  ]);
 
   useEffect(() => {
     if (!receiverId || startedConversationForUserId.current === receiverId) {
@@ -282,27 +321,7 @@ export function ChatPage() {
   }, [conversationId]);
 
   useEffect(() => {
-    if (!conversationId) {
-      return;
-    }
-
     const handleNewMessage = (message: ChatMessage) => {
-      if (message.conversationId !== conversationId) {
-        return;
-      }
-
-      queryClient.setQueryData<ChatMessage[]>(
-        ["chat", "messages", conversationId],
-        (currentMessages = []) => {
-          const isExistingMessage = currentMessages.some(
-            (currentMessage) => currentMessage.id === message.id,
-          );
-
-          return isExistingMessage
-            ? currentMessages
-            : [...currentMessages, message];
-        },
-      );
       queryClient.setQueryData<ChatConversation[]>(
         chatConversationsQueryKey,
         (currentConversations = []) =>
@@ -317,6 +336,23 @@ export function ChatPage() {
                 : conversation,
             ),
           ),
+      );
+
+      if (message.conversationId !== conversationId) {
+        return;
+      }
+
+      queryClient.setQueryData<ChatMessage[]>(
+        ["chat", "messages", message.conversationId],
+        (currentMessages = []) => {
+          const isExistingMessage = currentMessages.some(
+            (currentMessage) => currentMessage.id === message.id,
+          );
+
+          return isExistingMessage
+            ? currentMessages
+            : [...currentMessages, message];
+        },
       );
     };
 
@@ -357,7 +393,14 @@ export function ChatPage() {
     setIsGroupDialogOpen(false);
     setGroupTitle("");
     setGroupMemberSearch("");
+    setDebouncedGroupMemberSearch("");
+    setIsGroupMemberSearchPending(false);
     setSelectedGroupMemberIds([]);
+  };
+
+  const handleGroupMemberSearchChange = (value: string) => {
+    setGroupMemberSearch(value);
+    setIsGroupMemberSearchPending(Boolean(value.trim()));
   };
 
   const toggleGroupMember = (userId: number) => {
@@ -482,6 +525,11 @@ export function ChatPage() {
             size="small"
             slotProps={{
               input: {
+                endAdornment: isSearchingGroupMembers ? (
+                  <InputAdornment position="end">
+                    <CircularProgress size={16} />
+                  </InputAdornment>
+                ) : null,
                 startAdornment: (
                   <InputAdornment position="start">
                     <Search size={16} />
@@ -834,15 +882,28 @@ export function ChatPage() {
               },
             }}
             value={groupMemberSearch}
-            onChange={(event) => setGroupMemberSearch(event.target.value)}
+            onChange={(event) => handleGroupMemberSearchChange(event.target.value)}
           />
+
+          {isSearchingGroupMembers ? (
+            <Stack
+              direction="row"
+              spacing={1}
+              sx={{ alignItems: "center", color: "text.secondary" }}
+            >
+              <CircularProgress size={14} />
+              <Typography variant="body2">Searching users</Typography>
+            </Stack>
+          ) : null}
 
           <Paper
             onScroll={handleGroupMembersScroll}
             sx={{ maxHeight: 320, overflowY: "auto" }}
             variant="outlined"
           >
-            {groupUsersQuery.isLoading ? (
+            {isSearchingGroupMembers ? <LinearProgress /> : null}
+
+            {groupUsersQuery.isLoading && groupMemberOptions.length === 0 ? (
               <Stack
                 spacing={1}
                 sx={{
@@ -858,6 +919,22 @@ export function ChatPage() {
               </Stack>
             ) : null}
 
+            {isSearchingGroupMembers && groupMemberOptions.length === 0 ? (
+              <Stack
+                spacing={1}
+                sx={{
+                  alignItems: "center",
+                  justifyContent: "center",
+                  minHeight: 180,
+                }}
+              >
+                <CircularProgress size={20} />
+                <Typography color="text.secondary" variant="body2">
+                  Searching users
+                </Typography>
+              </Stack>
+            ) : null}
+
             {groupUsersQuery.isError ? (
               <Box sx={{ p: 2 }}>
                 <Alert severity="error" variant="outlined">
@@ -867,6 +944,8 @@ export function ChatPage() {
             ) : null}
 
             {!groupUsersQuery.isLoading &&
+            !groupUsersQuery.isFetching &&
+            !isSearchingGroupMembers &&
             !groupUsersQuery.isError &&
             groupMemberOptions.length === 0 ? (
               <Box sx={{ p: 2 }}>
@@ -876,17 +955,33 @@ export function ChatPage() {
               </Box>
             ) : null}
 
-            {!groupUsersQuery.isLoading && !groupUsersQuery.isError ? (
+            {!groupUsersQuery.isError && groupMemberOptions.length > 0 ? (
               <List disablePadding>
                 {groupMemberOptions.map((user) => (
                   <GroupMemberOption
                     key={user.id}
-                    disabled={createGroupConversationMutation.isPending}
+                    disabled={
+                      createGroupConversationMutation.isPending ||
+                      user.id === currentUser?.id
+                    }
+                    isCurrentUser={user.id === currentUser?.id}
                     isSelected={selectedGroupMemberIds.includes(user.id)}
                     onToggle={() => toggleGroupMember(user.id)}
                     user={user}
                   />
                 ))}
+                {groupUsersQuery.isFetching &&
+                !groupUsersQuery.isFetchingNextPage ? (
+                  <Stack
+                    spacing={1}
+                    sx={{ alignItems: "center", px: 2, py: 1.5 }}
+                  >
+                    <CircularProgress size={18} />
+                    <Typography color="text.secondary" variant="body2">
+                      Searching users
+                    </Typography>
+                  </Stack>
+                ) : null}
                 {groupUsersQuery.isFetchingNextPage ? (
                   <Stack
                     spacing={1}
@@ -939,11 +1034,13 @@ export function ChatPage() {
 
 function GroupMemberOption({
   disabled,
+  isCurrentUser,
   isSelected,
   onToggle,
   user,
 }: {
   disabled: boolean;
+  isCurrentUser: boolean;
   isSelected: boolean;
   onToggle: () => void;
   user: User;
@@ -979,7 +1076,7 @@ function GroupMemberOption({
           {user.name}
         </Typography>
         <Typography color="text.secondary" noWrap variant="body2">
-          {user.email}
+          {isCurrentUser ? "Added automatically" : user.email}
         </Typography>
       </Box>
     </ListItemButton>

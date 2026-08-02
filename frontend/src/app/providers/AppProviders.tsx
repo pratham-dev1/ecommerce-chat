@@ -6,7 +6,13 @@ import { SocketConnectionProvider } from "@/services/socket/SocketConnectionProv
 
 import { ColorModeProvider } from "../theme/ColorModeProvider";
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: false,
+    },
+  },
+});
 
 export function AppProviders({ children }: PropsWithChildren) {
   return (

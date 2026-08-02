@@ -1,7 +1,12 @@
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useQuery,
+  type InfiniteData,
+  type QueryKey,
+} from "@tanstack/react-query";
 
 import { getRoles, getUser, getUsers } from "../api/usersApi";
-import type { UsersQueryParams } from "../types/user";
+import type { UsersQueryParams, UsersResponse } from "../types/user";
 
 export const usersQueryKey = ["users"] as const;
 export const rolesQueryKey = ["roles"] as const;
@@ -22,8 +27,15 @@ export function useInfiniteUsers(
     pageSize: number;
   },
 ) {
-  return useInfiniteQuery({
+  return useInfiniteQuery<
+    UsersResponse,
+    Error,
+    InfiniteData<UsersResponse>,
+    QueryKey,
+    number
+  >({
     initialPageParam: 1,
+    placeholderData: (previousData) => previousData,
     queryFn: ({ pageParam }) =>
       getUsers({
         ...params,
