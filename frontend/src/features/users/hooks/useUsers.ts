@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 
 import { getRoles, getUser, getUsers } from "../api/usersApi";
 import type { UsersQueryParams } from "../types/user";
@@ -13,6 +13,27 @@ export function useUsers(params: UsersQueryParams) {
     placeholderData: (previousData) => previousData,
     queryFn: () => getUsers(params),
     queryKey: [...usersQueryKey, params],
+    staleTime: usersCacheFreshTime,
+  });
+}
+
+export function useInfiniteUsers(
+  params: Omit<UsersQueryParams, "page" | "pageSize"> & {
+    pageSize: number;
+  },
+) {
+  return useInfiniteQuery({
+    initialPageParam: 1,
+    queryFn: ({ pageParam }) =>
+      getUsers({
+        ...params,
+        page: pageParam,
+      }),
+    queryKey: [...usersQueryKey, "infinite", params],
+    getNextPageParam: (lastPage) =>
+      lastPage.pagination.page < lastPage.pagination.totalPages
+        ? lastPage.pagination.page + 1
+        : undefined,
     staleTime: usersCacheFreshTime,
   });
 }

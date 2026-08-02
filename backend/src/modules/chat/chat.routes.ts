@@ -5,12 +5,15 @@ import { validateRequest } from "../../common/middleware/validateRequest";
 import { asyncHandler } from "../../common/utils/asyncHandler";
 import {
   createDirectConversationController,
+  createGroupConversationController,
+  listConversationsController,
   listMessagesController,
   sendMessageController,
 } from "./chat.controller";
 import {
   conversationIdParamsSchema,
   createDirectConversationSchema,
+  createGroupConversationSchema,
   sendMessageSchema,
 } from "./chat.validation";
 
@@ -21,6 +24,19 @@ chatRouter.post(
   authenticate,
   validateRequest({ body: createDirectConversationSchema }),
   asyncHandler(createDirectConversationController),
+);
+
+chatRouter.post(
+  "/conversations/group",
+  authenticate,
+  validateRequest({ body: createGroupConversationSchema }),
+  asyncHandler(createGroupConversationController),
+);
+
+chatRouter.get(
+  "/conversations",
+  authenticate,
+  asyncHandler(listConversationsController),
 );
 
 chatRouter.get(

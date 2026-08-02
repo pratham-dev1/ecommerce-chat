@@ -4,6 +4,7 @@ import { AppError } from "../../common/errors/AppError";
 import { ChatService } from "./chat.service";
 import {
   conversationIdParamsSchema,
+  createGroupConversationSchema,
   sendMessageSchema,
 } from "./chat.validation";
 
@@ -23,6 +24,33 @@ export async function createDirectConversationController(
   );
 
   res.status(wasCreated ? 201 : 200).json(conversation);
+}
+
+export async function createGroupConversationController(
+  req: Request,
+  res: Response,
+) {
+  if (!req.userId) {
+    throw new AppError("Current user is not available", 401, "AUTH_REQUIRED");
+  }
+
+  const input = createGroupConversationSchema.parse(req.body);
+  const conversation = await chatService.createGroupConversation(
+    Number(req.userId),
+    input,
+  );
+
+  res.status(201).json(conversation);
+}
+
+export async function listConversationsController(req: Request, res: Response) {
+  if (!req.userId) {
+    throw new AppError("Current user is not available", 401, "AUTH_REQUIRED");
+  }
+
+  const conversations = await chatService.listConversations(Number(req.userId));
+
+  res.status(200).json(conversations);
 }
 
 export async function listMessagesController(req: Request, res: Response) {

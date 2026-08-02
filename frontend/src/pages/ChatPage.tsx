@@ -3,8 +3,14 @@ import {
   Avatar,
   Badge,
   Box,
+  Button,
+  Checkbox,
   CircularProgress,
   Divider,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   IconButton,
   InputAdornment,
   List,
@@ -21,47 +27,108 @@ import {
   MoreVertical,
   Paperclip,
   Phone,
+  Plus,
   Search,
   Send,
   Smile,
+  UsersRound,
   Video,
 } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
-import { useLocation } from "react-router-dom";
+import type { UIEvent } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 
 import {
   createDirectConversation,
+  createGroupConversation,
+  getConversations,
   getConversationMessages,
-  sendMessage,
 } from "@/features/chat/api/chatApi";
 import { useAuthUser } from "@/features/auth";
-import type { Conversation } from "@/features/chat/types/chat";
-import { joinConversationRoom } from "@/services/socket/socketClient";
+import type {
+  ChatConversation,
+  ChatMessage,
+} from "@/features/chat/types/chat";
+import { useInfiniteUsers, type User } from "@/features/users";
+import {
+  joinConversationRoom,
+  sendSocketMessage,
+  socket,
+} from "@/services/socket/socketClient";
 
-type ChatTarget = {
+type DirectChatTarget = {
   name: string;
+  type: "direct";
   userId: number;
 };
 
+type GroupChatTarget = {
+  conversationId: number;
+  conversationType: "direct" | "group";
+  name: string;
+  type: "conversation";
+};
+
+type ChatTarget = DirectChatTarget | GroupChatTarget;
+
+const chatConversationsQueryKey = ["chat", "conversations"] as const;
+
 export function ChatPage() {
   const location = useLocation();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { data: currentUser } = useAuthUser();
   const chatTarget = getChatTargetFromLocationState(location.state);
-  const receiverId = chatTarget?.userId ?? null;
+  const receiverId = chatTarget?.type === "direct" ? chatTarget.userId : null;
+  const groupConversationId =
+    chatTarget?.type === "conversation" ? chatTarget.conversationId : null;
   const chatTitle = chatTarget?.name ?? "Select a chat";
   const chatAvatar = chatTarget ? getInitials(chatTarget.name) : "CH";
-  const [directConversation, setDirectConversation] = useState<Conversation | null>(null);
   const [conversationId, setConversationId] = useState<number | null>(null);
   const [isDirectConversationError, setIsDirectConversationError] = useState(false);
   const [isDirectConversationLoading, setIsDirectConversationLoading] = useState(false);
   const [isConversationJoinError, setIsConversationJoinError] = useState(false);
+  const [isConversationJoined, setIsConversationJoined] = useState(false);
+  const [isGroupDialogOpen, setIsGroupDialogOpen] = useState(false);
+  const [groupTitle, setGroupTitle] = useState("");
+  const [groupMemberSearch, setGroupMemberSearch] = useState("");
+  const [conversationSearch, setConversationSearch] = useState("");
+  const [selectedGroupMemberIds, setSelectedGroupMemberIds] = useState<number[]>([]);
   const [messageBody, setMessageBody] = useState("");
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const startedConversationForUserId = useRef<number | null>(null);
   const joinedConversationId = useRef<number | null>(null);
+  const groupUsersQueryParams = useMemo(
+    () => ({
+      pageSize: 25,
+      ...(groupMemberSearch.trim()
+        ? { search: groupMemberSearch.trim() }
+        : {}),
+    }),
+    [groupMemberSearch],
+  );
+  const groupUsersQuery = useInfiniteUsers(groupUsersQueryParams);
+  const groupMemberOptions = useMemo(
+    () =>
+      (groupUsersQuery.data?.pages.flatMap((page) => page.data) ?? []).filter(
+        (user) => user.id !== currentUser?.id,
+      ),
+    [currentUser?.id, groupUsersQuery.data?.pages],
+  );
   const messagesQueryKey = ["chat", "messages", conversationId] as const;
+  const {
+    data: conversations = [],
+    isError: isConversationsError,
+    isLoading: isConversationsLoading,
+  } = useQuery({
+    queryFn: getConversations,
+    queryKey: chatConversationsQueryKey,
+  });
+  const filteredConversations = useMemo(
+    () => filterConversations(conversations, conversationSearch),
+    [conversationSearch, conversations],
+  );
   const {
     data: messages = [],
     isError: isMessagesError,
@@ -72,16 +139,32 @@ export function ChatPage() {
     queryKey: messagesQueryKey,
   });
   const sendMessageMutation = useMutation({
-    mutationFn: sendMessage,
-    onSuccess: async () => {
+    mutationFn: sendSocketMessage,
+    onSuccess: () => {
       setMessageBody("");
-      await queryClient.invalidateQueries({ queryKey: messagesQueryKey });
     },
   });
-  const conversationCount = chatTarget ? "1 conversation" : "0 conversations";
-  const conversationStatus = isDirectConversationLoading
-    ? "Starting conversation"
-    : messages.at(-1)?.body ?? "No messages yet.";
+  const createGroupConversationMutation = useMutation({
+    mutationFn: createGroupConversation,
+    onSuccess: (conversation) => {
+      closeGroupDialog();
+      void queryClient.invalidateQueries({
+        queryKey: chatConversationsQueryKey,
+      });
+      navigate("/chat", {
+        state: {
+          conversationId: conversation.id,
+          conversationType: conversation.type,
+          name: conversation.title ?? "Group",
+          type: "conversation",
+        },
+      });
+    },
+  });
+  const conversationCount =
+    conversations.length === 1
+      ? "1 conversation"
+      : `${conversations.length} conversations`;
   const chatSubtitle = chatTarget
     ? isDirectConversationLoading
       ? "Starting conversation"
@@ -96,10 +179,12 @@ export function ChatPage() {
     let isActive = true;
 
     startedConversationForUserId.current = receiverId;
-    setDirectConversation(null);
     setConversationId(null);
     setIsDirectConversationError(false);
     setIsDirectConversationLoading(true);
+    setIsConversationJoined(false);
+    setIsConversationJoinError(false);
+    joinedConversationId.current = null;
 
     createDirectConversation(receiverId)
       .then((conversation) => {
@@ -113,8 +198,10 @@ export function ChatPage() {
           throw new Error("Conversation response did not include a valid id");
         }
 
-        setDirectConversation(conversation);
         setConversationId(nextConversationId);
+        void queryClient.invalidateQueries({
+          queryKey: chatConversationsQueryKey,
+        });
       })
       .catch(() => {
         if (isActive) {
@@ -133,7 +220,20 @@ export function ChatPage() {
         startedConversationForUserId.current = null;
       }
     };
-  }, [receiverId]);
+  }, [queryClient, receiverId]);
+
+  useEffect(() => {
+    if (!groupConversationId) {
+      return;
+    }
+
+    setConversationId(groupConversationId);
+    setIsDirectConversationError(false);
+    setIsDirectConversationLoading(false);
+    setIsConversationJoined(false);
+    setIsConversationJoinError(false);
+    joinedConversationId.current = null;
+  }, [groupConversationId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({
@@ -150,6 +250,7 @@ export function ChatPage() {
     let isActive = true;
 
     joinedConversationId.current = conversationId;
+    setIsConversationJoined(false);
     setIsConversationJoinError(false);
 
     joinConversationRoom(conversationId)
@@ -160,12 +261,17 @@ export function ChatPage() {
 
         if (!response.ok) {
           joinedConversationId.current = null;
+          setIsConversationJoined(false);
           setIsConversationJoinError(true);
+          return;
         }
+
+        setIsConversationJoined(true);
       })
       .catch(() => {
         if (isActive) {
           joinedConversationId.current = null;
+          setIsConversationJoined(false);
           setIsConversationJoinError(true);
         }
       });
@@ -175,10 +281,61 @@ export function ChatPage() {
     };
   }, [conversationId]);
 
+  useEffect(() => {
+    if (!conversationId) {
+      return;
+    }
+
+    const handleNewMessage = (message: ChatMessage) => {
+      if (message.conversationId !== conversationId) {
+        return;
+      }
+
+      queryClient.setQueryData<ChatMessage[]>(
+        ["chat", "messages", conversationId],
+        (currentMessages = []) => {
+          const isExistingMessage = currentMessages.some(
+            (currentMessage) => currentMessage.id === message.id,
+          );
+
+          return isExistingMessage
+            ? currentMessages
+            : [...currentMessages, message];
+        },
+      );
+      queryClient.setQueryData<ChatConversation[]>(
+        chatConversationsQueryKey,
+        (currentConversations = []) =>
+          sortConversationsByLatestMessage(
+            currentConversations.map((conversation) =>
+              conversation.id === message.conversationId
+                ? {
+                    ...conversation,
+                    lastMessage: message,
+                    updatedAt: message.updatedAt,
+                  }
+                : conversation,
+            ),
+          ),
+      );
+    };
+
+    socket.on("message:new", handleNewMessage);
+
+    return () => {
+      socket.off("message:new", handleNewMessage);
+    };
+  }, [conversationId, queryClient]);
+
   const handleSendMessage = async () => {
     const trimmedBody = messageBody.trim();
 
-    if (!conversationId || !trimmedBody || sendMessageMutation.isPending) {
+    if (
+      !conversationId ||
+      !isConversationJoined ||
+      !trimmedBody ||
+      sendMessageMutation.isPending
+    ) {
       return;
     }
 
@@ -188,7 +345,75 @@ export function ChatPage() {
     });
   };
 
+  const openGroupDialog = () => {
+    setIsGroupDialogOpen(true);
+  };
+
+  const closeGroupDialog = () => {
+    if (createGroupConversationMutation.isPending) {
+      return;
+    }
+
+    setIsGroupDialogOpen(false);
+    setGroupTitle("");
+    setGroupMemberSearch("");
+    setSelectedGroupMemberIds([]);
+  };
+
+  const toggleGroupMember = (userId: number) => {
+    setSelectedGroupMemberIds((currentMemberIds) =>
+      currentMemberIds.includes(userId)
+        ? currentMemberIds.filter((memberId) => memberId !== userId)
+        : [...currentMemberIds, userId],
+    );
+  };
+
+  const handleCreateGroup = async () => {
+    const trimmedTitle = groupTitle.trim();
+
+    if (
+      !trimmedTitle ||
+      selectedGroupMemberIds.length === 0 ||
+      createGroupConversationMutation.isPending
+    ) {
+      return;
+    }
+
+    await createGroupConversationMutation.mutateAsync({
+      memberIds: selectedGroupMemberIds,
+      title: trimmedTitle,
+    });
+  };
+
+  const handleGroupMembersScroll = (event: UIEvent<HTMLDivElement>) => {
+    const listElement = event.currentTarget;
+    const distanceFromBottom =
+      listElement.scrollHeight - listElement.scrollTop - listElement.clientHeight;
+
+    if (
+      distanceFromBottom > 80 ||
+      !groupUsersQuery.hasNextPage ||
+      groupUsersQuery.isFetchingNextPage
+    ) {
+      return;
+    }
+
+    void groupUsersQuery.fetchNextPage();
+  };
+
+  const handleOpenConversation = (conversation: ChatConversation) => {
+    navigate("/chat", {
+      state: {
+        conversationId: conversation.id,
+        conversationType: conversation.type,
+        name: conversation.displayName,
+        type: "conversation",
+      },
+    });
+  };
+
   return (
+    <>
     <Paper
       sx={{
         borderColor: "divider",
@@ -234,6 +459,15 @@ export function ChatPage() {
               {conversationCount}
             </Typography>
           </Box>
+          <Tooltip title="Create group">
+            <IconButton
+              aria-label="Create group"
+              onClick={openGroupDialog}
+              size="small"
+            >
+              <UsersRound size={18} />
+            </IconButton>
+          </Tooltip>
           <Tooltip title="More">
             <IconButton aria-label="More chat options" size="small">
               <MoreVertical size={18} />
@@ -243,6 +477,7 @@ export function ChatPage() {
 
         <Box sx={{ px: 2, pb: 1.5 }}>
           <TextField
+            onChange={(event) => setConversationSearch(event.target.value)}
             placeholder="Search chats"
             size="small"
             slotProps={{
@@ -254,55 +489,50 @@ export function ChatPage() {
                 ),
               },
             }}
+            value={conversationSearch}
           />
         </Box>
 
         <Divider />
 
         <List disablePadding sx={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
-          {chatTarget ? (
-            <ListItemButton
-              selected
-              sx={{
-                alignItems: "flex-start",
-                borderBottom: 1,
-                borderColor: "divider",
-                gap: 1.5,
-                px: 2,
-                py: 1.5,
-                "&.Mui-selected": {
-                  bgcolor: (theme) => alpha(theme.palette.primary.main, 0.1),
-                },
-                "&.Mui-selected:hover": {
-                  bgcolor: (theme) => alpha(theme.palette.primary.main, 0.14),
-                },
-              }}
-            >
-              <Avatar
-                sx={{
-                  bgcolor: "primary.main",
-                  fontSize: "0.86rem",
-                  fontWeight: 800,
-                }}
-              >
-                {chatAvatar}
-              </Avatar>
-              <Box sx={{ flex: 1, minWidth: 0 }}>
-                <Typography noWrap sx={{ fontWeight: 750 }} variant="body2">
-                  {chatTarget.name}
-                </Typography>
-                <Typography color="text.secondary" noWrap variant="body2">
-                  {conversationStatus}
-                </Typography>
-              </Box>
-            </ListItemButton>
-          ) : (
+          {isConversationsLoading ? (
+            <Stack spacing={1} sx={{ alignItems: "center", px: 2, py: 3 }}>
+              <CircularProgress size={20} />
+              <Typography color="text.secondary" variant="body2">
+                Loading conversations
+              </Typography>
+            </Stack>
+          ) : null}
+
+          {isConversationsError ? (
+            <Box sx={{ px: 2, py: 2 }}>
+              <Alert severity="error" variant="outlined">
+                Conversations could not be loaded.
+              </Alert>
+            </Box>
+          ) : null}
+
+          {!isConversationsLoading &&
+          !isConversationsError &&
+          filteredConversations.length === 0 ? (
             <Box sx={{ px: 2, py: 3 }}>
               <Typography color="text.secondary" variant="body2">
                 No conversations yet.
               </Typography>
             </Box>
-          )}
+          ) : null}
+
+          {!isConversationsLoading && !isConversationsError
+            ? filteredConversations.map((conversation) => (
+                <ConversationListItem
+                  key={conversation.id}
+                  conversation={conversation}
+                  isSelected={conversation.id === conversationId}
+                  onClick={() => handleOpenConversation(conversation)}
+                />
+              ))
+            : null}
         </List>
       </Stack>
 
@@ -372,7 +602,7 @@ export function ChatPage() {
           </Box>
         ) : null}
 
-        {receiverId && isConversationJoinError ? (
+        {chatTarget && isConversationJoinError ? (
           <Box
             sx={{
               borderBottom: 1,
@@ -513,7 +743,11 @@ export function ChatPage() {
             </IconButton>
           </Tooltip>
           <TextField
-            disabled={!conversationId || sendMessageMutation.isPending}
+            disabled={
+              !conversationId ||
+              !isConversationJoined ||
+              sendMessageMutation.isPending
+            }
             onChange={(event) => setMessageBody(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
@@ -532,6 +766,7 @@ export function ChatPage() {
                 aria-label="Send message"
                 disabled={
                   !conversationId ||
+                  !isConversationJoined ||
                   !messageBody.trim() ||
                   sendMessageMutation.isPending
                 }
@@ -561,10 +796,287 @@ export function ChatPage() {
         </Stack>
       </Stack>
     </Paper>
+    <Dialog
+      fullWidth
+      maxWidth="sm"
+      onClose={closeGroupDialog}
+      open={isGroupDialogOpen}
+    >
+      <DialogTitle>Create group</DialogTitle>
+      <DialogContent>
+        <Stack spacing={2} sx={{ pt: 1 }}>
+          {createGroupConversationMutation.isError ? (
+            <Alert severity="error" variant="outlined">
+              Group could not be created.
+            </Alert>
+          ) : null}
+
+          <TextField
+            autoFocus
+            disabled={createGroupConversationMutation.isPending}
+            label="Group name"
+            onChange={(event) => setGroupTitle(event.target.value)}
+            size="small"
+            value={groupTitle}
+          />
+
+          <TextField
+            disabled={createGroupConversationMutation.isPending}
+            placeholder="Search members"
+            size="small"
+            slotProps={{
+              input: {
+                startAdornment: (
+                  <InputAdornment position="start">
+                    <Search size={16} />
+                  </InputAdornment>
+                ),
+              },
+            }}
+            value={groupMemberSearch}
+            onChange={(event) => setGroupMemberSearch(event.target.value)}
+          />
+
+          <Paper
+            onScroll={handleGroupMembersScroll}
+            sx={{ maxHeight: 320, overflowY: "auto" }}
+            variant="outlined"
+          >
+            {groupUsersQuery.isLoading ? (
+              <Stack
+                spacing={1}
+                sx={{
+                  alignItems: "center",
+                  justifyContent: "center",
+                  minHeight: 180,
+                }}
+              >
+                <CircularProgress size={20} />
+                <Typography color="text.secondary" variant="body2">
+                  Loading users
+                </Typography>
+              </Stack>
+            ) : null}
+
+            {groupUsersQuery.isError ? (
+              <Box sx={{ p: 2 }}>
+                <Alert severity="error" variant="outlined">
+                  Users could not be loaded.
+                </Alert>
+              </Box>
+            ) : null}
+
+            {!groupUsersQuery.isLoading &&
+            !groupUsersQuery.isError &&
+            groupMemberOptions.length === 0 ? (
+              <Box sx={{ p: 2 }}>
+                <Typography color="text.secondary" variant="body2">
+                  No users found.
+                </Typography>
+              </Box>
+            ) : null}
+
+            {!groupUsersQuery.isLoading && !groupUsersQuery.isError ? (
+              <List disablePadding>
+                {groupMemberOptions.map((user) => (
+                  <GroupMemberOption
+                    key={user.id}
+                    disabled={createGroupConversationMutation.isPending}
+                    isSelected={selectedGroupMemberIds.includes(user.id)}
+                    onToggle={() => toggleGroupMember(user.id)}
+                    user={user}
+                  />
+                ))}
+                {groupUsersQuery.isFetchingNextPage ? (
+                  <Stack
+                    spacing={1}
+                    sx={{ alignItems: "center", px: 2, py: 1.5 }}
+                  >
+                    <CircularProgress size={18} />
+                    <Typography color="text.secondary" variant="body2">
+                      Loading more users
+                    </Typography>
+                  </Stack>
+                ) : null}
+              </List>
+            ) : null}
+          </Paper>
+        </Stack>
+      </DialogContent>
+      <DialogActions sx={{ px: 3, pb: 2 }}>
+        <Button
+          disabled={createGroupConversationMutation.isPending}
+          onClick={closeGroupDialog}
+          variant="outlined"
+        >
+          Cancel
+        </Button>
+        <Button
+          disabled={
+            !groupTitle.trim() ||
+            selectedGroupMemberIds.length === 0 ||
+            createGroupConversationMutation.isPending
+          }
+          onClick={() => {
+            void handleCreateGroup();
+          }}
+          startIcon={
+            createGroupConversationMutation.isPending ? (
+              <CircularProgress color="inherit" size={16} />
+            ) : (
+              <Plus size={16} />
+            )
+          }
+          variant="contained"
+        >
+          Save
+        </Button>
+      </DialogActions>
+    </Dialog>
+    </>
+  );
+}
+
+function GroupMemberOption({
+  disabled,
+  isSelected,
+  onToggle,
+  user,
+}: {
+  disabled: boolean;
+  isSelected: boolean;
+  onToggle: () => void;
+  user: User;
+}) {
+  return (
+    <ListItemButton
+      disabled={disabled}
+      onClick={onToggle}
+      sx={{
+        alignItems: "center",
+        borderBottom: 1,
+        borderColor: "divider",
+        gap: 1.5,
+        px: 2,
+        py: 1.25,
+        "&:last-of-type": {
+          borderBottom: 0,
+        },
+      }}
+    >
+      <Checkbox checked={isSelected} disableRipple sx={{ p: 0 }} />
+      <Avatar
+        sx={{
+          bgcolor: "primary.main",
+          fontSize: "0.82rem",
+          fontWeight: 800,
+        }}
+      >
+        {getInitials(user.name)}
+      </Avatar>
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        <Typography noWrap sx={{ fontWeight: 750 }} variant="body2">
+          {user.name}
+        </Typography>
+        <Typography color="text.secondary" noWrap variant="body2">
+          {user.email}
+        </Typography>
+      </Box>
+    </ListItemButton>
+  );
+}
+
+function ConversationListItem({
+  conversation,
+  isSelected,
+  onClick,
+}: {
+  conversation: ChatConversation;
+  isSelected: boolean;
+  onClick: () => void;
+}) {
+  const summary =
+    conversation.lastMessage?.body ??
+    (conversation.type === "group"
+      ? `${conversation.members.length} members`
+      : "No messages yet.");
+
+  return (
+    <ListItemButton
+      onClick={onClick}
+      selected={isSelected}
+      sx={{
+        alignItems: "flex-start",
+        borderBottom: 1,
+        borderColor: "divider",
+        gap: 1.5,
+        px: 2,
+        py: 1.5,
+        "&.Mui-selected": {
+          bgcolor: (theme) => alpha(theme.palette.primary.main, 0.1),
+        },
+        "&.Mui-selected:hover": {
+          bgcolor: (theme) => alpha(theme.palette.primary.main, 0.14),
+        },
+      }}
+    >
+      <Avatar
+        sx={{
+          bgcolor: "primary.main",
+          fontSize: "0.86rem",
+          fontWeight: 800,
+        }}
+      >
+        {conversation.type === "group" ? (
+          <UsersRound size={16} />
+        ) : (
+          getInitials(conversation.displayName)
+        )}
+      </Avatar>
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        <Stack
+          direction="row"
+          spacing={1}
+          sx={{ alignItems: "baseline", minWidth: 0 }}
+        >
+          <Typography noWrap sx={{ flex: 1, fontWeight: 750 }} variant="body2">
+            {conversation.displayName}
+          </Typography>
+          {conversation.lastMessage ? (
+            <Typography color="text.secondary" variant="caption">
+              {formatMessageTime(conversation.lastMessage.createdAt)}
+            </Typography>
+          ) : null}
+        </Stack>
+        <Typography color="text.secondary" noWrap variant="body2">
+          {summary}
+        </Typography>
+      </Box>
+    </ListItemButton>
   );
 }
 
 function getChatTargetFromLocationState(state: unknown): ChatTarget | null {
+  if (
+    typeof state === "object" &&
+    state !== null &&
+    "type" in state &&
+    state.type === "conversation" &&
+    "conversationId" in state &&
+    "conversationType" in state &&
+    "name" in state &&
+    typeof state.conversationId === "number" &&
+    (state.conversationType === "direct" || state.conversationType === "group") &&
+    typeof state.name === "string"
+  ) {
+    return {
+      conversationId: state.conversationId,
+      conversationType: state.conversationType,
+      name: state.name,
+      type: "conversation",
+    };
+  }
+
   if (
     typeof state === "object" &&
     state !== null &&
@@ -575,11 +1087,45 @@ function getChatTargetFromLocationState(state: unknown): ChatTarget | null {
   ) {
     return {
       name: state.name,
+      type: "direct",
       userId: state.userId,
     };
   }
 
   return null;
+}
+
+function filterConversations(
+  conversations: ChatConversation[],
+  searchValue: string,
+) {
+  const normalizedSearchValue = searchValue.trim().toLowerCase();
+
+  if (!normalizedSearchValue) {
+    return conversations;
+  }
+
+  return conversations.filter((conversation) => {
+    const lastMessageBody = conversation.lastMessage?.body ?? "";
+
+    return (
+      conversation.displayName.toLowerCase().includes(normalizedSearchValue) ||
+      lastMessageBody.toLowerCase().includes(normalizedSearchValue)
+    );
+  });
+}
+
+function sortConversationsByLatestMessage(conversations: ChatConversation[]) {
+  return [...conversations].sort((firstConversation, secondConversation) => {
+    const firstTime = new Date(
+      firstConversation.lastMessage?.createdAt ?? firstConversation.updatedAt,
+    ).getTime();
+    const secondTime = new Date(
+      secondConversation.lastMessage?.createdAt ?? secondConversation.updatedAt,
+    ).getTime();
+
+    return secondTime - firstTime;
+  });
 }
 
 function getInitials(value: string) {

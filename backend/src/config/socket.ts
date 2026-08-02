@@ -20,6 +20,19 @@ type JoinConversationAck =
       ok: false;
     };
 
+type SocketChatMessage = Awaited<ReturnType<ChatService["sendMessage"]>>;
+
+type SendMessageAck =
+  | {
+      message: SocketChatMessage;
+      ok: true;
+    }
+  | {
+      code: string;
+      message: string;
+      ok: false;
+    };
+
 export function initializeSocketServer(httpServer: HttpServer) {
   const io = new Server(httpServer, {
     cors: {
@@ -70,6 +83,33 @@ export function initializeSocketServer(httpServer: HttpServer) {
       },
     );
 
+    socket.on(
+      "message:send",
+      async (payload: unknown, ack?: (response: SendMessageAck) => void) => {
+        try {
+          const { body, conversationId } = getSendMessagePayload(payload);
+          const currentUserId = Number(socket.data.userId);
+          const message = await chatService.sendMessage(
+            currentUserId,
+            conversationId,
+            { body },
+          );
+
+          io.to(getConversationRoomName(conversationId)).emit(
+            "message:new",
+            message,
+          );
+
+          ack?.({
+            message,
+            ok: true,
+          });
+        } catch (error) {
+          ack?.(toSendMessageError(error));
+        }
+      },
+    );
+
     socket.on("disconnect", (reason) => {
       console.log(`Socket disconnected: ${socket.id} (${reason})`);
     });
@@ -111,6 +151,39 @@ function getConversationIdFromPayload(payload: unknown) {
   return conversationId;
 }
 
+function getSendMessagePayload(payload: unknown) {
+  const conversationId = getConversationIdFromPayload(payload);
+
+  if (typeof payload !== "object" || payload === null) {
+    throw new AppError("Message body is required", 400, "MESSAGE_BODY_REQUIRED");
+  }
+
+  const bodyValue = (payload as { body?: unknown }).body;
+
+  if (typeof bodyValue !== "string") {
+    throw new AppError("Message body is required", 400, "MESSAGE_BODY_REQUIRED");
+  }
+
+  const body = bodyValue.trim();
+
+  if (!body) {
+    throw new AppError("Message body is required", 400, "MESSAGE_BODY_REQUIRED");
+  }
+
+  if (body.length > 4000) {
+    throw new AppError(
+      "Message body must be at most 4000 characters",
+      400,
+      "MESSAGE_BODY_TOO_LONG",
+    );
+  }
+
+  return {
+    body,
+    conversationId,
+  };
+}
+
 function toJoinConversationError(error: unknown): JoinConversationAck {
   if (error instanceof AppError) {
     return {
@@ -123,6 +196,22 @@ function toJoinConversationError(error: unknown): JoinConversationAck {
   return {
     code: "JOIN_CONVERSATION_FAILED",
     message: "Failed to join conversation",
+    ok: false,
+  };
+}
+
+function toSendMessageError(error: unknown): SendMessageAck {
+  if (error instanceof AppError) {
+    return {
+      code: error.code,
+      message: error.message,
+      ok: false,
+    };
+  }
+
+  return {
+    code: "SEND_MESSAGE_FAILED",
+    message: "Failed to send message",
     ok: false,
   };
 }

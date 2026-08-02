@@ -9,6 +9,17 @@ export type ConversationMember = {
   userId: number;
 };
 
+export type ConversationMemberUser = {
+  email: string;
+  id: number;
+  name: string;
+  username: string;
+};
+
+export type ConversationMemberWithUser = ConversationMember & {
+  user: ConversationMemberUser | null;
+};
+
 export type Conversation = {
   createdAt: string;
   createdBy: number;
@@ -18,6 +29,12 @@ export type Conversation = {
   title: string | null;
   type: "direct" | "group";
   updatedAt: string;
+};
+
+export type ChatConversation = Omit<Conversation, "members"> & {
+  displayName: string;
+  lastMessage: ChatMessage | null;
+  members: ConversationMemberWithUser[];
 };
 
 export type ChatMessage = {
