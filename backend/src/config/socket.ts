@@ -22,6 +22,11 @@ type JoinConversationAck =
 
 type SocketChatMessage = Awaited<ReturnType<ChatService["sendMessage"]>>;
 
+type ConversationUpdatedPayload = {
+  conversationId: number;
+  lastMessage: SocketChatMessage;
+};
+
 type SendMessageAck =
   | {
       message: SocketChatMessage;
@@ -61,7 +66,11 @@ export function initializeSocketServer(httpServer: HttpServer) {
   });
 
   io.on("connection", (socket) => {
-    console.log(`Socket connected: ${socket.id} (user ${socket.data.userId})`);
+    const currentUserId = Number(socket.data.userId);
+
+    socket.join(getUserRoomName(currentUserId));
+
+    console.log(`Socket connected: ${socket.id} (user ${currentUserId})`);
 
     socket.on(
       "conversation:join",
@@ -100,6 +109,21 @@ export function initializeSocketServer(httpServer: HttpServer) {
             message,
           );
 
+          const memberIds = await chatService.getActiveConversationMemberIds(
+            conversationId,
+          );
+          const conversationUpdatedPayload: ConversationUpdatedPayload = {
+            conversationId,
+            lastMessage: message,
+          };
+
+          for (const memberId of memberIds) {
+            io.to(getUserRoomName(memberId)).emit(
+              "conversation:updated",
+              conversationUpdatedPayload,
+            );
+          }
+
           ack?.({
             message,
             ok: true,
@@ -120,6 +144,10 @@ export function initializeSocketServer(httpServer: HttpServer) {
 
 function getConversationRoomName(conversationId: number) {
   return `conversation:${conversationId}`;
+}
+
+function getUserRoomName(userId: number) {
+  return `user:${userId}`;
 }
 
 function getConversationIdFromPayload(payload: unknown) {

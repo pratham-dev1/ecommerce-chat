@@ -45,11 +45,13 @@ import {
   createGroupConversation,
   getConversations,
   getConversationMessages,
+  markConversationAsRead,
 } from "@/features/chat/api/chatApi";
 import { useAuthUser } from "@/features/auth";
 import type {
   ChatConversation,
   ChatMessage,
+  ConversationUpdatedEvent,
 } from "@/features/chat/types/chat";
 import { useInfiniteUsers, type User } from "@/features/users";
 import {
@@ -102,6 +104,7 @@ export function ChatPage() {
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const startedConversationForUserId = useRef<number | null>(null);
   const joinedConversationId = useRef<number | null>(null);
+  const lastMarkedReadKey = useRef<string | null>(null);
   const groupUsersQueryParams = useMemo(
     () => ({
       pageSize: 25,
@@ -282,6 +285,59 @@ export function ChatPage() {
   }, [messages.length]);
 
   useEffect(() => {
+    if (
+      !conversationId ||
+      isMessagesLoading ||
+      isMessagesError ||
+      messages.length === 0
+    ) {
+      return;
+    }
+
+    const latestMessage = messages[messages.length - 1];
+    const markReadKey = `${conversationId}:${latestMessage.id}`;
+
+    if (lastMarkedReadKey.current === markReadKey) {
+      return;
+    }
+
+    let isActive = true;
+
+    lastMarkedReadKey.current = markReadKey;
+
+    markConversationAsRead(conversationId)
+      .then((readState) => {
+        if (!isActive) {
+          return;
+        }
+
+        queryClient.setQueryData<ChatConversation[]>(
+          chatConversationsQueryKey,
+          (currentConversations = []) =>
+            markConversationReadInCache(
+              currentConversations,
+              readState.conversationId,
+            ),
+        );
+      })
+      .catch(() => {
+        if (isActive && lastMarkedReadKey.current === markReadKey) {
+          lastMarkedReadKey.current = null;
+        }
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [
+    conversationId,
+    isMessagesError,
+    isMessagesLoading,
+    messages,
+    queryClient,
+  ]);
+
+  useEffect(() => {
     if (!conversationId || joinedConversationId.current === conversationId) {
       return;
     }
@@ -325,17 +381,7 @@ export function ChatPage() {
       queryClient.setQueryData<ChatConversation[]>(
         chatConversationsQueryKey,
         (currentConversations = []) =>
-          sortConversationsByLatestMessage(
-            currentConversations.map((conversation) =>
-              conversation.id === message.conversationId
-                ? {
-                    ...conversation,
-                    lastMessage: message,
-                    updatedAt: message.updatedAt,
-                  }
-                : conversation,
-            ),
-          ),
+          updateConversationsWithLastMessage(currentConversations, message),
       );
 
       if (message.conversationId !== conversationId) {
@@ -355,13 +401,48 @@ export function ChatPage() {
         },
       );
     };
+    const handleConversationUpdated = (event: ConversationUpdatedEvent) => {
+      let hasConversationInCache = false;
+      const shouldIncreaseUnread =
+        event.conversationId !== conversationId &&
+        event.lastMessage.senderId !== currentUser?.id;
+
+      queryClient.setQueryData<ChatConversation[]>(
+        chatConversationsQueryKey,
+        (currentConversations = []) => {
+          hasConversationInCache = currentConversations.some(
+            (conversation) => conversation.id === event.conversationId,
+          );
+
+          if (!hasConversationInCache) {
+            return currentConversations;
+          }
+
+          return updateConversationsWithLastMessage(
+            currentConversations,
+            event.lastMessage,
+            {
+              incrementUnread: shouldIncreaseUnread,
+            },
+          );
+        },
+      );
+
+      if (!hasConversationInCache) {
+        void queryClient.invalidateQueries({
+          queryKey: chatConversationsQueryKey,
+        });
+      }
+    };
 
     socket.on("message:new", handleNewMessage);
+    socket.on("conversation:updated", handleConversationUpdated);
 
     return () => {
       socket.off("message:new", handleNewMessage);
+      socket.off("conversation:updated", handleConversationUpdated);
     };
-  }, [conversationId, queryClient]);
+  }, [conversationId, currentUser?.id, queryClient]);
 
   const handleSendMessage = async () => {
     const trimmedBody = messageBody.trim();
@@ -1092,6 +1173,8 @@ function ConversationListItem({
   isSelected: boolean;
   onClick: () => void;
 }) {
+  const unreadCount = conversation.unreadCount ?? 0;
+  const hasUnreadMessages = unreadCount > 0;
   const summary =
     conversation.lastMessage?.body ??
     (conversation.type === "group"
@@ -1117,35 +1200,54 @@ function ConversationListItem({
         },
       }}
     >
-      <Avatar
-        sx={{
-          bgcolor: "primary.main",
-          fontSize: "0.86rem",
-          fontWeight: 800,
-        }}
+      <Badge
+        badgeContent={unreadCount}
+        color="primary"
+        invisible={!hasUnreadMessages}
+        max={99}
       >
-        {conversation.type === "group" ? (
-          <UsersRound size={16} />
-        ) : (
-          getInitials(conversation.displayName)
-        )}
-      </Avatar>
+        <Avatar
+          sx={{
+            bgcolor: "primary.main",
+            fontSize: "0.86rem",
+            fontWeight: 800,
+          }}
+        >
+          {conversation.type === "group" ? (
+            <UsersRound size={16} />
+          ) : (
+            getInitials(conversation.displayName)
+          )}
+        </Avatar>
+      </Badge>
       <Box sx={{ flex: 1, minWidth: 0 }}>
         <Stack
           direction="row"
           spacing={1}
           sx={{ alignItems: "baseline", minWidth: 0 }}
         >
-          <Typography noWrap sx={{ flex: 1, fontWeight: 750 }} variant="body2">
+          <Typography
+            noWrap
+            sx={{ flex: 1, fontWeight: hasUnreadMessages ? 850 : 750 }}
+            variant="body2"
+          >
             {conversation.displayName}
           </Typography>
           {conversation.lastMessage ? (
-            <Typography color="text.secondary" variant="caption">
+            <Typography
+              color={hasUnreadMessages ? "primary.main" : "text.secondary"}
+              variant="caption"
+            >
               {formatMessageTime(conversation.lastMessage.createdAt)}
             </Typography>
           ) : null}
         </Stack>
-        <Typography color="text.secondary" noWrap variant="body2">
+        <Typography
+          color={hasUnreadMessages ? "text.primary" : "text.secondary"}
+          noWrap
+          sx={{ fontWeight: hasUnreadMessages ? 700 : 400 }}
+          variant="body2"
+        >
           {summary}
         </Typography>
       </Box>
@@ -1223,6 +1325,41 @@ function sortConversationsByLatestMessage(conversations: ChatConversation[]) {
 
     return secondTime - firstTime;
   });
+}
+
+function updateConversationsWithLastMessage(
+  conversations: ChatConversation[],
+  message: ChatMessage,
+  options: { incrementUnread?: boolean } = {},
+) {
+  return sortConversationsByLatestMessage(
+    conversations.map((conversation) =>
+      conversation.id === message.conversationId
+        ? {
+            ...conversation,
+            lastMessage: message,
+            unreadCount: options.incrementUnread
+              ? (conversation.unreadCount ?? 0) + 1
+              : (conversation.unreadCount ?? 0),
+            updatedAt: message.updatedAt,
+          }
+        : conversation,
+    ),
+  );
+}
+
+function markConversationReadInCache(
+  conversations: ChatConversation[],
+  conversationId: number,
+) {
+  return conversations.map((conversation) =>
+    conversation.id === conversationId
+      ? {
+          ...conversation,
+          unreadCount: 0,
+        }
+      : conversation,
+  );
 }
 
 function getInitials(value: string) {

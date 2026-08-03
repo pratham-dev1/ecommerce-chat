@@ -1,6 +1,11 @@
 import { httpClient } from "@/services/api/httpClient";
 
-import type { ChatConversation, ChatMessage, Conversation } from "../types/chat";
+import type {
+  ChatConversation,
+  ChatMessage,
+  Conversation,
+  MarkConversationReadResponse,
+} from "../types/chat";
 
 export type CreateGroupConversationPayload = {
   memberIds: number[];
@@ -37,6 +42,14 @@ export async function getConversations() {
 export async function getConversationMessages(conversationId: number) {
   const { data } = await httpClient.get<ChatMessage[]>(
     `/chat/conversations/${conversationId}/messages`,
+  );
+
+  return data;
+}
+
+export async function markConversationAsRead(conversationId: number) {
+  const { data } = await httpClient.post<MarkConversationReadResponse>(
+    `/chat/conversations/${conversationId}/read`,
   );
 
   return data;

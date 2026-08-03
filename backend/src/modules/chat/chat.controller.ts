@@ -67,6 +67,23 @@ export async function listMessagesController(req: Request, res: Response) {
   res.status(200).json(messages);
 }
 
+export async function markConversationReadController(
+  req: Request,
+  res: Response,
+) {
+  if (!req.userId) {
+    throw new AppError("Current user is not available", 401, "AUTH_REQUIRED");
+  }
+
+  const { conversationId } = conversationIdParamsSchema.parse(req.params);
+  const readState = await chatService.markConversationAsRead(
+    Number(req.userId),
+    Number(conversationId),
+  );
+
+  res.status(200).json(readState);
+}
+
 export async function sendMessageController(req: Request, res: Response) {
   if (!req.userId) {
     throw new AppError("Current user is not available", 401, "AUTH_REQUIRED");

@@ -27,6 +27,11 @@ type LastMessageRow = {
   updatedAt: Date | string;
 };
 
+type UnreadCountRow = {
+  conversationId: number | string;
+  unreadCount: number | string;
+};
+
 export class ChatService {
   async createDirectConversation(
     senderId: number,
@@ -145,7 +150,7 @@ export class ChatService {
       return [];
     }
 
-    const [conversations, members, lastMessages] = await Promise.all([
+    const [conversations, members, lastMessages, unreadCounts] = await Promise.all([
       Conversation.findAll({
         where: {
           id: conversationIds,
@@ -162,6 +167,7 @@ export class ChatService {
         },
       }),
       this.listLastMessages(conversationIds),
+      this.listUnreadCounts(currentUserId, conversationIds),
     ]);
     const userIds = [
       ...new Set(members.map((member) => Number(member.userId))),
@@ -176,6 +182,12 @@ export class ChatService {
     const membersByConversationId = this.groupMembersByConversationId(members);
     const lastMessagesByConversationId = new Map(
       lastMessages.map((message) => [Number(message.conversationId), message]),
+    );
+    const unreadCountsByConversationId = new Map(
+      unreadCounts.map((unreadCount) => [
+        Number(unreadCount.conversationId),
+        Number(unreadCount.unreadCount),
+      ]),
     );
 
     return conversations
@@ -202,6 +214,7 @@ export class ChatService {
           members: serializedMembers,
           title: conversation.title,
           type: conversation.type,
+          unreadCount: unreadCountsByConversationId.get(conversationId) ?? 0,
           updatedAt: conversation.updatedAt.toISOString(),
         };
       })
@@ -280,6 +293,54 @@ export class ChatService {
     });
 
     return this.serializeMessage(message);
+  }
+
+  async getActiveConversationMemberIds(conversationId: number) {
+    const members = await ConversationMember.findAll({
+      attributes: ["userId"],
+      where: {
+        conversationId,
+        leftAt: null,
+      },
+    });
+
+    return members.map((member) => Number(member.userId));
+  }
+
+  async markConversationAsRead(currentUserId: number, conversationId: number) {
+    const member = await ConversationMember.findOne({
+      where: {
+        conversationId,
+        leftAt: null,
+        userId: currentUserId,
+      },
+    });
+
+    if (!member) {
+      throw new AppError("Conversation not found", 404, "CONVERSATION_NOT_FOUND");
+    }
+
+    const latestMessage = await Message.findOne({
+      attributes: ["id"],
+      order: [
+        ["createdAt", "DESC"],
+        ["id", "DESC"],
+      ],
+      where: {
+        conversationId,
+      },
+    });
+    const lastReadMessageId = latestMessage ? Number(latestMessage.id) : null;
+
+    await member.update({
+      lastReadMessageId,
+    });
+
+    return {
+      conversationId,
+      lastReadMessageId,
+      unreadCount: 0,
+    };
   }
 
   private createDirectKey(firstUserId: number, secondUserId: number) {
@@ -435,6 +496,36 @@ export class ChatService {
       },
     ).then((messages) =>
       messages.map((message) => this.serializeLastMessageRow(message)),
+    );
+  }
+
+  private async listUnreadCounts(currentUserId: number, conversationIds: number[]) {
+    return sequelize.query<UnreadCountRow>(
+      `
+        SELECT
+          messages.conversation_id AS "conversationId",
+          COUNT(messages.id) AS "unreadCount"
+        FROM messages
+        INNER JOIN conversation_members current_member
+          ON current_member.conversation_id = messages.conversation_id
+          AND current_member.user_id = :currentUserId
+          AND current_member.left_at IS NULL
+        WHERE messages.conversation_id IN (:conversationIds)
+          AND messages.sender_id <> :currentUserId
+          AND messages.deleted_at IS NULL
+          AND (
+            current_member.last_read_message_id IS NULL
+            OR messages.id > current_member.last_read_message_id
+          )
+        GROUP BY messages.conversation_id
+      `,
+      {
+        replacements: {
+          conversationIds,
+          currentUserId,
+        },
+        type: QueryTypes.SELECT,
+      },
     );
   }
 

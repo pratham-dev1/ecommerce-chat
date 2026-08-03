@@ -35,6 +35,7 @@ export type ChatConversation = Omit<Conversation, "members"> & {
   displayName: string;
   lastMessage: ChatMessage | null;
   members: ConversationMemberWithUser[];
+  unreadCount: number;
 };
 
 export type ChatMessage = {
@@ -47,4 +48,15 @@ export type ChatMessage = {
   messageType: "text";
   senderId: number;
   updatedAt: string;
+};
+
+export type ConversationUpdatedEvent = {
+  conversationId: number;
+  lastMessage: ChatMessage;
+};
+
+export type MarkConversationReadResponse = {
+  conversationId: number;
+  lastReadMessageId: number | null;
+  unreadCount: number;
 };

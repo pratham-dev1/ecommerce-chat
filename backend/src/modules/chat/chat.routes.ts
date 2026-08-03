@@ -8,6 +8,7 @@ import {
   createGroupConversationController,
   listConversationsController,
   listMessagesController,
+  markConversationReadController,
   sendMessageController,
 } from "./chat.controller";
 import {
@@ -44,6 +45,13 @@ chatRouter.get(
   authenticate,
   validateRequest({ params: conversationIdParamsSchema }),
   asyncHandler(listMessagesController),
+);
+
+chatRouter.post(
+  "/conversations/:conversationId/read",
+  authenticate,
+  validateRequest({ params: conversationIdParamsSchema }),
+  asyncHandler(markConversationReadController),
 );
 
 chatRouter.post(
