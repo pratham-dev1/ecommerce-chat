@@ -55,9 +55,12 @@ import type {
 } from "@/features/chat/types/chat";
 import { useInfiniteUsers, type User } from "@/features/users";
 import {
+  emitTypingStart,
+  emitTypingStop,
   joinConversationRoom,
   sendSocketMessage,
   socket,
+  type TypingEvent,
 } from "@/services/socket/socketClient";
 
 type DirectChatTarget = {
@@ -76,6 +79,7 @@ type GroupChatTarget = {
 type ChatTarget = DirectChatTarget | GroupChatTarget;
 
 const chatConversationsQueryKey = ["chat", "conversations"] as const;
+const typingStopDelayMs = 1500;
 
 export function ChatPage() {
   const location = useLocation();
@@ -101,10 +105,15 @@ export function ChatPage() {
   const [conversationSearch, setConversationSearch] = useState("");
   const [selectedGroupMemberIds, setSelectedGroupMemberIds] = useState<number[]>([]);
   const [messageBody, setMessageBody] = useState("");
+  const [typingUserIdsByConversationId, setTypingUserIdsByConversationId] =
+    useState<Record<number, number[]>>({});
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const startedConversationForUserId = useRef<number | null>(null);
   const joinedConversationId = useRef<number | null>(null);
   const lastMarkedReadKey = useRef<string | null>(null);
+  const isTypingRef = useRef(false);
+  const typingConversationIdRef = useRef<number | null>(null);
+  const typingStopTimeoutId = useRef<number | null>(null);
   const groupUsersQueryParams = useMemo(
     () => ({
       pageSize: 25,
@@ -141,6 +150,25 @@ export function ChatPage() {
   const filteredConversations = useMemo(
     () => filterConversations(conversations, conversationSearch),
     [conversationSearch, conversations],
+  );
+  const currentConversation = useMemo(
+    () =>
+      conversationId
+        ? conversations.find((conversation) => conversation.id === conversationId) ??
+          null
+        : null,
+    [conversationId, conversations],
+  );
+  const currentTypingUserIds = useMemo(
+    () =>
+      conversationId
+        ? typingUserIdsByConversationId[conversationId] ?? []
+        : [],
+    [conversationId, typingUserIdsByConversationId],
+  );
+  const typingLabel = useMemo(
+    () => getTypingLabel(currentTypingUserIds, currentConversation),
+    [currentConversation, currentTypingUserIds],
   );
   const {
     data: messages = [],
@@ -179,9 +207,7 @@ export function ChatPage() {
       ? "1 conversation"
       : `${conversations.length} conversations`;
   const chatSubtitle = chatTarget
-    ? isDirectConversationLoading
-      ? "Starting conversation"
-      : ""
+    ? typingLabel || (isDirectConversationLoading ? "Starting conversation" : "")
     : "Choose a user to start a conversation";
 
   useEffect(() => {
@@ -276,6 +302,12 @@ export function ChatPage() {
     setIsConversationJoinError(false);
     joinedConversationId.current = null;
   }, [groupConversationId]);
+
+  useEffect(() => {
+    return () => {
+      sendTypingStop();
+    };
+  }, [conversationId]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({
@@ -434,13 +466,62 @@ export function ChatPage() {
         });
       }
     };
+    const handleTypingStart = (event: TypingEvent) => {
+      if (event.userId === currentUser?.id) {
+        return;
+      }
+
+      setTypingUserIdsByConversationId((currentTypingUserIdsByConversationId) => {
+        const currentTypingUserIds =
+          currentTypingUserIdsByConversationId[event.conversationId] ?? [];
+
+        if (currentTypingUserIds.includes(event.userId)) {
+          return currentTypingUserIdsByConversationId;
+        }
+
+        return {
+          ...currentTypingUserIdsByConversationId,
+          [event.conversationId]: [...currentTypingUserIds, event.userId],
+        };
+      });
+    };
+    const handleTypingStop = (event: TypingEvent) => {
+      setTypingUserIdsByConversationId((currentTypingUserIdsByConversationId) => {
+        const currentTypingUserIds =
+          currentTypingUserIdsByConversationId[event.conversationId];
+
+        if (!currentTypingUserIds?.includes(event.userId)) {
+          return currentTypingUserIdsByConversationId;
+        }
+
+        const nextTypingUserIds = currentTypingUserIds.filter(
+          (userId) => userId !== event.userId,
+        );
+        const nextTypingUserIdsByConversationId = {
+          ...currentTypingUserIdsByConversationId,
+        };
+
+        if (nextTypingUserIds.length === 0) {
+          delete nextTypingUserIdsByConversationId[event.conversationId];
+        } else {
+          nextTypingUserIdsByConversationId[event.conversationId] =
+            nextTypingUserIds;
+        }
+
+        return nextTypingUserIdsByConversationId;
+      });
+    };
 
     socket.on("message:new", handleNewMessage);
     socket.on("conversation:updated", handleConversationUpdated);
+    socket.on("typing:start", handleTypingStart);
+    socket.on("typing:stop", handleTypingStop);
 
     return () => {
       socket.off("message:new", handleNewMessage);
       socket.off("conversation:updated", handleConversationUpdated);
+      socket.off("typing:start", handleTypingStart);
+      socket.off("typing:stop", handleTypingStop);
     };
   }, [conversationId, currentUser?.id, queryClient]);
 
@@ -456,11 +537,63 @@ export function ChatPage() {
       return;
     }
 
+    sendTypingStop(conversationId);
+
     await sendMessageMutation.mutateAsync({
       body: trimmedBody,
       conversationId,
     });
   };
+
+  function handleMessageBodyChange(value: string) {
+    setMessageBody(value);
+
+    if (!conversationId || !isConversationJoined || sendMessageMutation.isPending) {
+      return;
+    }
+
+    if (!value.trim()) {
+      sendTypingStop(conversationId);
+      return;
+    }
+
+    if (!isTypingRef.current || typingConversationIdRef.current !== conversationId) {
+      if (isTypingRef.current && typingConversationIdRef.current !== conversationId) {
+        sendTypingStop(typingConversationIdRef.current);
+      }
+
+      emitTypingStart(conversationId);
+      isTypingRef.current = true;
+      typingConversationIdRef.current = conversationId;
+    }
+
+    clearTypingStopTimeout();
+    typingStopTimeoutId.current = window.setTimeout(() => {
+      sendTypingStop(conversationId);
+    }, typingStopDelayMs);
+  }
+
+  function clearTypingStopTimeout() {
+    if (typingStopTimeoutId.current === null) {
+      return;
+    }
+
+    window.clearTimeout(typingStopTimeoutId.current);
+    typingStopTimeoutId.current = null;
+  }
+
+  function sendTypingStop(targetConversationId = typingConversationIdRef.current) {
+    clearTypingStopTimeout();
+
+    if (targetConversationId && isTypingRef.current) {
+      emitTypingStop(targetConversationId);
+    }
+
+    if (!targetConversationId || typingConversationIdRef.current === targetConversationId) {
+      isTypingRef.current = false;
+      typingConversationIdRef.current = null;
+    }
+  }
 
   const openGroupDialog = () => {
     setIsGroupDialogOpen(true);
@@ -659,6 +792,9 @@ export function ChatPage() {
                   conversation={conversation}
                   isSelected={conversation.id === conversationId}
                   onClick={() => handleOpenConversation(conversation)}
+                  typingUserIds={
+                    typingUserIdsByConversationId[conversation.id] ?? []
+                  }
                 />
               ))
             : null}
@@ -877,7 +1013,7 @@ export function ChatPage() {
               !isConversationJoined ||
               sendMessageMutation.isPending
             }
-            onChange={(event) => setMessageBody(event.target.value)}
+            onChange={(event) => handleMessageBodyChange(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter" && !event.shiftKey) {
                 event.preventDefault();
@@ -1168,18 +1304,23 @@ function ConversationListItem({
   conversation,
   isSelected,
   onClick,
+  typingUserIds,
 }: {
   conversation: ChatConversation;
   isSelected: boolean;
   onClick: () => void;
+  typingUserIds: number[];
 }) {
   const unreadCount = conversation.unreadCount ?? 0;
   const hasUnreadMessages = unreadCount > 0;
+  const typingLabel = getTypingLabel(typingUserIds, conversation);
+  const hasTypingUsers = Boolean(typingLabel);
   const summary =
-    conversation.lastMessage?.body ??
-    (conversation.type === "group"
-      ? `${conversation.members.length} members`
-      : "No messages yet.");
+    typingLabel ||
+    (conversation.lastMessage?.body ??
+      (conversation.type === "group"
+        ? `${conversation.members.length} members`
+        : "No messages yet."));
 
   return (
     <ListItemButton
@@ -1243,9 +1384,15 @@ function ConversationListItem({
           ) : null}
         </Stack>
         <Typography
-          color={hasUnreadMessages ? "text.primary" : "text.secondary"}
+          color={
+            hasTypingUsers
+              ? "primary.main"
+              : hasUnreadMessages
+                ? "text.primary"
+                : "text.secondary"
+          }
           noWrap
-          sx={{ fontWeight: hasUnreadMessages ? 700 : 400 }}
+          sx={{ fontWeight: hasTypingUsers || hasUnreadMessages ? 700 : 400 }}
           variant="body2"
         >
           {summary}
@@ -1360,6 +1507,41 @@ function markConversationReadInCache(
         }
       : conversation,
   );
+}
+
+function getTypingLabel(
+  typingUserIds: number[],
+  conversation: ChatConversation | null,
+) {
+  if (!conversation || typingUserIds.length === 0) {
+    return "";
+  }
+
+  if (conversation.type === "direct") {
+    return "typing...";
+  }
+
+  const typingUserNames = typingUserIds
+    .map(
+      (userId) =>
+        conversation.members.find((member) => member.userId === userId)?.user
+          ?.name,
+    )
+    .filter((name): name is string => Boolean(name));
+
+  if (typingUserNames.length === 0) {
+    return "Someone is typing";
+  }
+
+  if (typingUserNames.length === 1) {
+    return `${typingUserNames[0]} is typing...`;
+  }
+
+  if (typingUserNames.length === 2) {
+    return `${typingUserNames[0]} and ${typingUserNames[1]} are typing`;
+  }
+
+  return `${typingUserNames[0]} and ${typingUserNames.length - 1} others are typing`;
 }
 
 function getInitials(value: string) {

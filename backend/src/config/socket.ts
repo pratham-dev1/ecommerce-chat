@@ -134,9 +134,51 @@ export function initializeSocketServer(httpServer: HttpServer) {
       },
     );
 
+    socket.on("typing:start", async (payload: unknown) => {
+      await emitTypingEvent("typing:start", payload);
+    });
+
+    socket.on("typing:stop", async (payload: unknown) => {
+      await emitTypingEvent("typing:stop", payload);
+    });
+
     socket.on("disconnect", (reason) => {
       console.log(`Socket disconnected: ${socket.id} (${reason})`);
     });
+
+    async function emitTypingEvent(
+      eventName: "typing:start" | "typing:stop",
+      payload: unknown,
+    ) {
+      try {
+        const conversationId = getConversationIdFromPayload(payload);
+
+        await chatService.ensureConversationMember(currentUserId, conversationId);
+
+        const typingPayload = {
+          conversationId,
+          userId: currentUserId,
+        };
+        const memberIds = await chatService.getActiveConversationMemberIds(
+          conversationId,
+        );
+
+        socket.to(getConversationRoomName(conversationId)).emit(
+          eventName,
+          typingPayload,
+        );
+
+        for (const memberId of memberIds) {
+          if (memberId === currentUserId) {
+            continue;
+          }
+
+          io.to(getUserRoomName(memberId)).emit(eventName, typingPayload);
+        }
+      } catch {
+        // Ignore invalid typing events. Message send/join still return explicit errors.
+      }
+    }
   });
 
   return io;

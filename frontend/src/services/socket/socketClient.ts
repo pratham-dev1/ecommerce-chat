@@ -30,6 +30,11 @@ export type SendSocketMessageResponse =
       ok: false;
     };
 
+export type TypingEvent = {
+  conversationId: number;
+  userId: number;
+};
+
 export function joinConversationRoom(conversationId: number) {
   return new Promise<JoinConversationResponse>((resolve, reject) => {
     socket.timeout(5000).emit(
@@ -50,6 +55,14 @@ export function joinConversationRoom(conversationId: number) {
       },
     );
   });
+}
+
+export function emitTypingStart(conversationId: number) {
+  socket.emit("typing:start", { conversationId });
+}
+
+export function emitTypingStop(conversationId: number) {
+  socket.emit("typing:stop", { conversationId });
 }
 
 export function sendSocketMessage(input: {
