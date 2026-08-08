@@ -81,11 +81,11 @@ export async function markConversationReadController(
     Number(req.userId),
     Number(conversationId),
   );
-  const memberIds = await chatService.getActiveConversationMemberIds(
+  const readMemberIds = await chatService.getActiveConversationMemberIds(
     Number(conversationId),
   );
 
-  emitConversationRead(readState, memberIds);
+  emitConversationRead(readState, readMemberIds);
 
   res.status(200).json(readState);
 }
