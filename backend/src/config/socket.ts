@@ -9,6 +9,12 @@ import { verifyAccessToken } from "../modules/auth/token";
 
 const chatService = new ChatService();
 
+type ConversationReadPayload = {
+  conversationId: number;
+  lastReadMessageId: number | null;
+  userId: number;
+};
+
 type JoinConversationAck =
   | {
       conversationId: number;
@@ -45,6 +51,7 @@ export function initializeSocketServer(httpServer: HttpServer) {
       origin: env.clientUrl,
     },
   });
+  socketServer = io;
 
   io.use((socket, next) => {
     const token = getHandshakeAccessToken(socket.handshake.headers);
@@ -182,6 +189,21 @@ export function initializeSocketServer(httpServer: HttpServer) {
   });
 
   return io;
+}
+
+let socketServer: Server | null = null;
+
+export function emitConversationRead(
+  payload: ConversationReadPayload,
+  memberIds: number[],
+) {
+  if (!socketServer) {
+    return;
+  }
+
+  for (const memberId of memberIds) {
+    socketServer.to(getUserRoomName(memberId)).emit("conversation:read", payload);
+  }
 }
 
 function getConversationRoomName(conversationId: number) {

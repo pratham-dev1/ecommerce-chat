@@ -51,6 +51,7 @@ import { useAuthUser } from "@/features/auth";
 import type {
   ChatConversation,
   ChatMessage,
+  ConversationReadEvent,
   ConversationUpdatedEvent,
 } from "@/features/chat/types/chat";
 import { useInfiniteUsers, type User } from "@/features/users";
@@ -346,10 +347,9 @@ export function ChatPage() {
         queryClient.setQueryData<ChatConversation[]>(
           chatConversationsQueryKey,
           (currentConversations = []) =>
-            markConversationReadInCache(
-              currentConversations,
-              readState.conversationId,
-            ),
+            updateConversationReadStateInCache(currentConversations, readState, {
+              clearUnread: true,
+            }),
         );
       })
       .catch(() => {
@@ -466,6 +466,15 @@ export function ChatPage() {
         });
       }
     };
+    const handleConversationRead = (event: ConversationReadEvent) => {
+      queryClient.setQueryData<ChatConversation[]>(
+        chatConversationsQueryKey,
+        (currentConversations = []) =>
+          updateConversationReadStateInCache(currentConversations, event, {
+            clearUnread: event.userId === currentUser?.id,
+          }),
+      );
+    };
     const handleTypingStart = (event: TypingEvent) => {
       if (event.userId === currentUser?.id) {
         return;
@@ -514,12 +523,14 @@ export function ChatPage() {
 
     socket.on("message:new", handleNewMessage);
     socket.on("conversation:updated", handleConversationUpdated);
+    socket.on("conversation:read", handleConversationRead);
     socket.on("typing:start", handleTypingStart);
     socket.on("typing:stop", handleTypingStop);
 
     return () => {
       socket.off("message:new", handleNewMessage);
       socket.off("conversation:updated", handleConversationUpdated);
+      socket.off("conversation:read", handleConversationRead);
       socket.off("typing:start", handleTypingStart);
       socket.off("typing:stop", handleTypingStop);
     };
@@ -935,6 +946,13 @@ export function ChatPage() {
 
           {messages.map((message) => {
             const isOutgoing = currentUser?.id === message.senderId;
+            const isMessageRead =
+              isOutgoing &&
+              isConversationMessageRead(
+                message,
+                currentConversation,
+                currentUser?.id,
+              );
 
             return (
               <Box
@@ -971,13 +989,18 @@ export function ChatPage() {
                       color: isOutgoing ? "primary.contrastText" : "text.secondary",
                       justifyContent: "flex-end",
                       mt: 0.5,
-                      opacity: isOutgoing ? 0.82 : 1,
+                      opacity: isOutgoing && !isMessageRead ? 0.82 : 1,
                     }}
                   >
                     <Typography variant="caption">
                       {formatMessageTime(message.createdAt)}
                     </Typography>
-                    {isOutgoing ? <CheckCheck size={14} /> : null}
+                    {isOutgoing ? (
+                      <CheckCheck
+                        color={isMessageRead ? "#34b7f1" : "currentColor"}
+                        size={14}
+                      />
+                    ) : null}
                   </Stack>
                 </Box>
               </Box>
@@ -1495,17 +1518,48 @@ function updateConversationsWithLastMessage(
   );
 }
 
-function markConversationReadInCache(
+function updateConversationReadStateInCache(
   conversations: ChatConversation[],
-  conversationId: number,
+  readState: ConversationReadEvent,
+  options: { clearUnread?: boolean } = {},
 ) {
   return conversations.map((conversation) =>
-    conversation.id === conversationId
+    conversation.id === readState.conversationId
       ? {
           ...conversation,
-          unreadCount: 0,
+          members: conversation.members.map((member) =>
+            member.userId === readState.userId
+              ? {
+                  ...member,
+                  lastReadMessageId: readState.lastReadMessageId,
+                }
+              : member,
+          ),
+          unreadCount: options.clearUnread ? 0 : (conversation.unreadCount ?? 0),
         }
       : conversation,
+  );
+}
+
+function isConversationMessageRead(
+  message: ChatMessage,
+  conversation: ChatConversation | null,
+  currentUserId: number | undefined,
+) {
+  if (!conversation || !currentUserId || message.senderId !== currentUserId) {
+    return false;
+  }
+
+  const otherMembers = conversation.members.filter(
+    (member) => member.userId !== currentUserId && member.leftAt === null,
+  );
+
+  if (otherMembers.length === 0) {
+    return false;
+  }
+
+  return otherMembers.every(
+    (member) => (member.lastReadMessageId ?? 0) >= message.id,
   );
 }
 
