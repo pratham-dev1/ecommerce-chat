@@ -340,6 +340,8 @@ export class ChatService {
       conversationId,
       lastReadMessageId,
       unreadCount: 0,
+      userId: currentUserId,
+      userId: currentUserId,
     };
   }
 

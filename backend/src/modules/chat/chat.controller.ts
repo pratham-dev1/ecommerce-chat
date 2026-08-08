@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 
 import { AppError } from "../../common/errors/AppError";
+import { emitConversationRead } from "../../config/socket";
 import { ChatService } from "./chat.service";
 import {
   conversationIdParamsSchema,
@@ -80,6 +81,16 @@ export async function markConversationReadController(
     Number(req.userId),
     Number(conversationId),
   );
+  emitConversationRead(
+    readState,
+    await chatService.getActiveConversationMemberIds(Number(conversationId)),
+  );
+
+  const readMemberIds = await chatService.getActiveConversationMemberIds(
+    Number(conversationId),
+  );
+
+  emitConversationRead(readState, readMemberIds);
 
   res.status(200).json(readState);
 }

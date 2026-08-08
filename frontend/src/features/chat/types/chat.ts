@@ -55,8 +55,12 @@ export type ConversationUpdatedEvent = {
   lastMessage: ChatMessage;
 };
 
-export type MarkConversationReadResponse = {
+export type ConversationReadEvent = {
   conversationId: number;
   lastReadMessageId: number | null;
+  userId: number;
+};
+
+export type MarkConversationReadResponse = ConversationReadEvent & {
   unreadCount: number;
 };
