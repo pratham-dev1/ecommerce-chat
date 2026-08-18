@@ -341,7 +341,6 @@ export class ChatService {
       lastReadMessageId,
       unreadCount: 0,
       userId: currentUserId,
-      userId: currentUserId,
     };
   }
 

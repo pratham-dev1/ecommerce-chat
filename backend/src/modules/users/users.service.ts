@@ -145,6 +145,18 @@ export class UsersService {
     return this.getUserById(userId);
   }
 
+  async listAllUsersForEmail() {
+    const users = await User.findAll({
+      attributes: ["id", "name", "email"],
+    });
+
+    return users.map((user) => ({
+      email: user.email,
+      id: Number(user.id),
+      name: user.name,
+    }));
+  }
+
   async deleteUser(userId: number) {
     const user = await User.findByPk(userId);
 
