@@ -13,12 +13,13 @@ redisClient.on("error", (error) => {
   console.warn("Redis client error", error);
 });
 
+// Connect as soon as this module loads, not when initializeRedis() is explicitly called,
+// so anything that imports redisClient at import-time (e.g. loginRateLimiter's RedisStore) doesn't race a still-closed client.
+const connectionPromise = redisClient.connect();
+
 export async function initializeRedis() {
   try {
-    if (!redisClient.isOpen) {
-      await redisClient.connect();
-    }
-
+    await connectionPromise;
     await redisClient.ping();
     console.log("Redis connected");
   } catch (error) {

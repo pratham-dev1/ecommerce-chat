@@ -1,5 +1,6 @@
 import { Router } from "express";
 
+import { loginRateLimiter } from "../../common/middleware/loginRateLimiter";
 import { validateRequest } from "../../common/middleware/validateRequest";
 import { asyncHandler } from "../../common/utils/asyncHandler";
 import {
@@ -12,7 +13,12 @@ import { loginSchema, registerSchema } from "./auth.validation";
 
 export const authRouter = Router();
 
-authRouter.post("/login", validateRequest({ body: loginSchema }), asyncHandler(loginController));
+authRouter.post(
+  "/login",
+  loginRateLimiter,
+  validateRequest({ body: loginSchema }),
+  asyncHandler(loginController),
+);
 authRouter.post("/logout", asyncHandler(logoutController));
 authRouter.post("/refresh", asyncHandler(refreshController));
 authRouter.post(
