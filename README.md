@@ -39,6 +39,11 @@ The backend should allow the frontend through `CLIENT_URL`.
 
 EC2 - 
 
-DB user
+
+login vm - got to D drive first
+ssh -i "D:\backend-key.pem" ubuntu@13.210.124.36
+
+
+DB user cred
 user - ecommerce_user
 password - 1234

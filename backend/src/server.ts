@@ -17,7 +17,7 @@ async function main() {
   registerDailyUserEmailJobs();
 
   httpServer.listen(env.port, () => {
-    console.log(`API listening on http://localhost:${env.port}`);
+    console.log(`API listening on port ${env.port}`);
   });
 }
 
