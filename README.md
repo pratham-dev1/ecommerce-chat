@@ -33,3 +33,12 @@ npm run dev
 
 The frontend should call the backend through `VITE_API_BASE_URL`.
 The backend should allow the frontend through `CLIENT_URL`.
+
+
+
+
+EC2 - 
+
+DB user
+user - ecommerce_user
+password - 1234
