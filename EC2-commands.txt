@@ -1,0 +1,2 @@
+Login VM
+ssh -i "D:\backend-key.pem" ubuntu@13.210.124.36

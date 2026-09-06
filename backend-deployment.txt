@@ -1,0 +1,211 @@
+Backend Deployment
+
+EC2 Backend Deployment - What We Did
+
+1. Created the EC2 Server
+
+We launched an Ubuntu EC2 instance on AWS.
+
+We used a small t2.micro instance for our backend server.
+
+The EC2 machine is basically a remote Linux computer running in AWS.
+
+2. Connected to EC2
+
+From Windows PowerShell, we connected to the EC2 machine using SSH and
+the .pem key downloaded while creating the instance.
+
+After connecting, we were working inside the Ubuntu VM.
+
+3. Installed Git
+
+We installed Git on EC2 so that we could download our project from the
+Git repository.
+
+Then we cloned the ecommerce-chat repository.
+
+Our repository contains both:
+
+ecommerce-chat - frontend - backend
+
+The frontend is deployed separately on Vercel.
+
+EC2 is being used for the backend.
+
+4. Installed Node.js
+
+Our backend is a Node.js/TypeScript application, so we installed Node.js
+on EC2.
+
+Then we installed all backend dependencies.
+
+5. Created the Production Environment Configuration
+
+Our .env file is not stored in Git for security reasons.
+
+Therefore, we created a .env separately on the EC2 server.
+
+It contains configuration such as:
+
+-   Backend port
+-   Database connection
+-   Redis connection
+-   JWT secrets
+-   Frontend URL
+-   SMTP/email configuration
+-   Other production settings
+
+Our Node backend runs internally on port 5000.
+
+6. Installed PostgreSQL
+
+Our application needs a database.
+
+Instead of using a separate AWS database service, we installed
+PostgreSQL directly on the same EC2 machine.
+
+We created:
+
+-   a database
+-   a separate database user
+-   a password for that user
+
+The backend connects to PostgreSQL locally.
+
+PostgreSQL is not exposed to the internet.
+
+7. Installed Redis
+
+Our application also needs Redis, especially for BullMQ/background jobs.
+
+We installed Redis on the same EC2 machine.
+
+The backend and BullMQ worker connect to Redis locally.
+
+Redis is also not exposed to the internet.
+
+8. Built the Backend
+
+Because the backend is written in TypeScript, we compiled it into
+JavaScript.
+
+This produced the dist folder.
+
+There are two important programs:
+
+server.js - Backend API worker.js - BullMQ background worker
+
+9. Tested the Backend
+
+Initially, we ran the Node backend manually.
+
+It successfully connected to PostgreSQL and Redis and started the API on
+port 5000.
+
+We tested the health API and confirmed that the backend was working.
+
+10. Installed PM2
+
+Running Node manually is not suitable for a server because the
+application could stop when we disconnect from SSH.
+
+So we installed PM2.
+
+PM2 is responsible for keeping our Node processes running.
+
+PM2 manages: - Backend API - BullMQ Worker
+
+These are two separate Node processes.
+
+Both are currently using fork mode.
+
+11. Configured PM2 for EC2 Restarts
+
+We configured PM2 to automatically start when Ubuntu starts.
+
+We also saved our backend and worker processes in PM2.
+
+The flow is:
+
+EC2 starts -> PM2 starts -> Backend starts -> BullMQ Worker starts
+
+We do not need to manually start the backend every time we reconnect
+through SSH.
+
+12. Installed Nginx
+
+Our Node backend internally runs on port 5000.
+
+We did not want users to access the application using IP:5000.
+
+So we installed Nginx.
+
+Nginx sits in front of Node:
+
+Internet -> Nginx -> Node.js on port 5000
+
+Nginx receives public web requests and forwards them internally to the
+Node backend.
+
+13. Configured Nginx Reverse Proxy
+
+We configured Nginx so that when a request comes to the server, Nginx
+forwards it to the Node application running locally on port 5000.
+
+Users therefore do not need to know that Node is running on port 5000.
+
+The port still exists internally. Nginx simply sits in front of it.
+
+14. Added HTTPS
+
+Our Vercel frontend uses HTTPS.
+
+Browsers do not normally allow an HTTPS frontend to call an HTTP backend
+because that creates a Mixed Content security problem.
+
+Therefore, we configured HTTPS for our backend.
+
+We used Let’s Encrypt and Certbot to create an SSL certificate for the
+current EC2 public IP.
+
+Then we configured Nginx to use that certificate.
+
+The request flow is:
+
+HTTPS request -> Nginx -> Node.js on port 5000
+
+15. Current Architecture
+
+Vercel Frontend | HTTPS | v AWS EC2 Server | Nginx | v Node Backend
+(Port 5000, managed by PM2) | +—- PostgreSQL | +—- Redis | v BullMQ
+Worker (managed by PM2)
+
+Everything except the frontend currently runs on the same EC2 machine.
+
+What Each Technology Is Doing
+
+EC2 Our Linux server.
+
+Git Gets our source code.
+
+Node.js Runs our backend application.
+
+PostgreSQL Stores application data.
+
+Redis Provides infrastructure used by queues/background processing.
+
+BullMQ Processes background jobs.
+
+PM2 Keeps the backend API and BullMQ worker running.
+
+Nginx Acts as the public web server/reverse proxy in front of Node.
+
+Certbot / Let’s Encrypt Provides the HTTPS certificate.
+
+Vercel Hosts our frontend.
+
+Simple Way to Remember
+
+EC2 = machine Node.js = backend application PostgreSQL = database
+Redis + BullMQ = background jobs PM2 = keeps Node processes alive Nginx
+= sits in front of Node Certbot = gives Nginx HTTPS Vercel = frontend
